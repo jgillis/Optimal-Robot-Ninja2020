@@ -1,8 +1,11 @@
 from rockit import *
 from numpy import sin, cos, pi, exp, linspace
-from casadi import sum1, Function, vertcat, horzcat
+from casadi import sum1, Function, vertcat, horzcat, DM
 
 ocp = Ocp(T=FreeTime(1))
+
+#obstacle_mode = "classic"
+obstacle_mode = "potential"
 
 N = 50 # Number of control intervals
 L = 0.4 # Wheel geometry
@@ -21,19 +24,17 @@ ocp.set_der(x, v*cos(theta))
 ocp.set_der(y, v*sin(theta))
 ocp.set_der(theta, (2/L)*(v2-v1))
 
-max_meas = 1000
+max_meas = 100
 
-
-
-sigma       = 0.1
-Ghat        = 0.15
+sigma       = 0.01
+Ghat        = 1
 umin       = -0.2
 umax       = 0.2
 ommin       = -pi
 ommax       = pi
 
 # Symbolic parameters of the optimization (not optimized)
-#measp       = ocp.parameter(max_meas,2)
+measp       = ocp.parameter(max_meas,2)
 xbeginp     = ocp.parameter(3,1)
 xfinalp     = ocp.parameter(3,1)
 
@@ -48,14 +49,6 @@ ocp.subject_to(umin <= (v2 <= umax))
 ocp.subject_to(v >= 0)
 ocp.subject_to(ommin <= (ocp.der(theta) <= ommax))
 
-
-# Obstacles
-sx = sigma
-sy = sigma
-#g = sum1(exp(-(x-measp[:,0])**2/(2*sx**2)-(y-measp[:,1])**2./(2*sy**2)))
-#costf = Function('costf',[measp,x,y],[g])
-#ocp.subject_to(costf(measp,x,y)<=Ghat)
-
 ocp.add_objective(ocp.T)
 
 ocp.solver('ipopt')
@@ -67,14 +60,29 @@ ocp.set_initial(v1,0.01)
 ocp.set_initial(v2,0.01)
 
 ocp.set_value(xbeginp, vertcat(0,0,pi/2))
-ocp.set_value(xfinalp, vertcat(0.02,0.1,pi/2))
+ocp.set_value(xfinalp, vertcat(0.1,0.5,pi/2))
 
-# Simulate an obstacle
+# Simulated obstacle: a sphere
+obs_p = vertcat(0.03,0.25)
+obs_r = 0.05
+
+if obstacle_mode=="classic":
+  # Classic approach
+  ocp.subject_to((x-obs_p[0])**2+(y-obs_p[1])**2>=obs_r**2)
+else:
+  # Potential approach
+  sx = sigma
+  sy = sigma
+  g = sum1(exp(-(x-measp[:,0])**2/(2*sx**2)-(y-measp[:,1])**2./(2*sy**2)))
+  costf = Function('costf',[measp,x,y],[g])
+  ocp.subject_to(costf(measp,x,y)<=Ghat)
+
+
 ts = linspace(0,2*pi,max_meas)
-meas_val = horzcat(0.1*cos(ts)-0.1,0.1*sin(ts))
+meas_val = horzcat(obs_p[0]+obs_r*cos(ts),obs_p[1]+obs_r*sin(ts))
 
-#ocp.set_value(measp, meas_val)
-#ocp.set_value(measp, meas_val)
+ocp.set_value(measp, meas_val)
+
 
 sol = ocp.solve()
 
@@ -91,7 +99,22 @@ _,xsol = sol.sample(x,grid='integrator',refine=10)
 _,ysol = sol.sample(y,grid='integrator',refine=10)
 plot(xsol,ysol)
 
+if obstacle_mode=="classic":
+  ts = linspace(0,2*pi,100)
+  plot(obs_p[0]+obs_r*cos(ts),obs_p[1]+obs_r*sin(ts),'r')
+else:
+
+  xx, yy = np.meshgrid(linspace(-0.1,0.2,40), linspace(0,0.5,80))
+  res = np.array(costf(meas_val,DM(xx.ravel()).T,DM(yy.ravel()).T))
+  zz = res.reshape(xx.shape)
+
+  contourf(xx,yy,zz)
+  colorbar()
+  contour(xx,yy,zz,[Ghat])
+  plot(np.array(meas_val)[:,0],np.array(meas_val)[:,1],'ok')
+
 axis("equal")
+
 
 figure()
 ts, thetasol = sol.sample(theta,grid='integrator',refine=10)
@@ -105,11 +128,11 @@ plot(ts,ysol,label="y")
 plot(ts,thetasol,label="theta")
 legend()
 
-
-
-#xx, yy = np.meshgrid(linspace(-0.1,0.1,10), linspace(-0.1,0.1,20))
-#costf(measp,x,y)
-
 show(block=True)
+
+
+
+
+
 
 
